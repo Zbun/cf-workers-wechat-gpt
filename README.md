@@ -16,9 +16,9 @@
 | `GEMINI_MODEL` | Gemini 选择的模型，例如 gemini-2.0-flash-lite |
 
 **如何设置？**
-. 进入 Cloudflare Workers -> 选择你的 Worker -> Settings（设置）。
-. 进入 Environment Variables（环境变量）。
-. 添加以上变量，然后点击保存。
+1. 进入 Cloudflare Workers -> 选择你的 Worker -> Settings（设置）。
+2. 进入 Environment Variables（环境变量）。
+3. 添加以上变量，然后点击保存。
 
 
 
