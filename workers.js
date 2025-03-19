@@ -1,5 +1,9 @@
 export default {
   async fetch(request, env) {
+    if (isCrawler(request)) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
     const { searchParams } = new URL(request.url);
 
     if (request.method === "GET") {
@@ -19,7 +23,7 @@ export default {
       const msg = parseXML(text);
       if (!msg) return new Response("Invalid XML", { status: 400 });
 
-      const useOpenAI = env.USE_OPENAI === "true"; // 从环境变量读取开关
+      const useOpenAI = env.USE_OPENAI === "true";
       const userMsg = msg.Content;
       let reply;
 
@@ -37,6 +41,28 @@ export default {
     return new Response("Invalid Request", { status: 405 });
   }
 };
+
+// 🚨 防爬虫方法
+function isCrawler(request) {
+  const userAgent = request.headers.get("User-Agent") || "";
+  const referer = request.headers.get("Referer") || "";
+  const forbiddenAgents = ["curl", "wget", "Python-requests", "Scrapy", "bot", "spider"];
+  const forbiddenReferers = ["http://", "https://", "example.com"]; // 可修改为自己的白名单
+
+  // 拦截常见爬虫 UA
+  if (forbiddenAgents.some(bot => userAgent.toLowerCase().includes(bot))) {
+    console.warn(`Blocked Crawler: ${userAgent}`);
+    return true;
+  }
+
+  // 限制 Referer 来源
+  if (referer && !referer.includes("weixin.qq.com")) {
+    console.warn(`Blocked Referer: ${referer}`);
+    return true;
+  }
+
+  return false;
+}
 
 function checkSignature(signature, timestamp, nonce, token) {
   const tempStr = [token, timestamp, nonce].sort().join("");
