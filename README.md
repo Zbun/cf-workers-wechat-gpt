@@ -14,6 +14,7 @@
 | `OPENAI_SYSTEM_PROMPT` | 预置角色 Prompt |
 | `GEMINI_API_KEY` | Gemini API Key |
 | `GEMINI_MODEL` | Gemini 选择的模型，例如 gemini-2.0-flash-lite |
+| `AI_CHAT_HISTORY` | 使用chat时，需要配置 cf KV存储 |
 
 **如何设置？**
 1. 进入 Cloudflare Workers -> 选择你的 Worker -> Settings（设置）。
