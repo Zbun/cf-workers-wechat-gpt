@@ -27,8 +27,8 @@ export default {
       const userMsg = msg.Content;
       const fromUserName = msg.FromUserName; // 获取用户 FromUserName，用于区分用户
 
-      // 从环境变量获取历史记录限制数，默认为 4
-      const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 4;
+      // 从环境变量获取历史记录限制数，默认为 2
+      const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
 
       // 获取会话历史
       let conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY);
