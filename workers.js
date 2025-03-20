@@ -1,8 +1,8 @@
 export default {
   async fetch(request, env) {
-    if (isCrawler(request)) {
-      return new Response("Forbidden", { status: 403 });
-    }
+    // if (isCrawler(request)) {
+    //   return new Response("Forbidden", { status: 403 });
+    // }
 
     const { searchParams } = new URL(request.url);
 
