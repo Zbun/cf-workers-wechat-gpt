@@ -7,6 +7,7 @@
 | 变量名 | 作用     |
 | ------|-----------|
 | `WECHAT_TOKEN` | 公众号 Token，用于校验请求合法性 |
+| `WELCOME_MESSAGE`| 订阅时自动回复欢迎语 |
 | `USE_OPENAI` | `true` 使用 OpenAI，`false` 使用 Gemini|
 | `OPENAI_API_KEY` | OpenAI API Key |
 | `OPENAI_BASE_URL` | OpenAI API Base URL（支持代理）|
