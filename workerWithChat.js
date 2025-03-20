@@ -23,39 +23,47 @@ export default {
       const msg = parseXML(text);
       if (!msg) return new Response("Invalid XML", { status: 400 });
 
-      const useOpenAI = env.USE_OPENAI === "true";
-      const userMsg = msg.Content;
-      const fromUserName = msg.FromUserName; // 获取用户 FromUserName，用于区分用户
-
-      // 从环境变量获取历史记录限制数，默认为 2
-      const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
-
-      // 获取会话历史
-      let conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY);
-
-      // 将用户消息添加到会话历史
-      conversationHistory.push({ role: "user", content: userMsg });
-      conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
-
       let reply;
 
-      try {
-        reply = useOpenAI ? await chatWithOpenAI(userMsg, env, conversationHistory) : await chatWithGemini(userMsg, env, conversationHistory);
-      } catch (error) {
-        console.error("AI Error:", error);
-        reply = `AI 处理失败: ${error.message || "未知错误"}`;
+      // 处理关注事件
+      if (msg.MsgType === "event" && msg.Event.toLowerCase() === "subscribe") {
+        reply = env.WELCOME_MESSAGE || "感谢关注！我是基于 AI 的智能助手，可以回答您的各种问题。";
+      } else if (msg.MsgType === "text") {
+        const useOpenAI = env.USE_OPENAI === "true";
+        const userMsg = msg.Content;
+        const fromUserName = msg.FromUserName;
+
+        // 从环境变量获取历史记录限制数，默认为 2
+        const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
+
+        // 获取会话历史
+        let conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY);
+
+        // 将用户消息添加到会话历史
+        conversationHistory.push({ role: "user", content: userMsg });
+        conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
+
+        try {
+          reply = useOpenAI ? await chatWithOpenAI(userMsg, env, conversationHistory) : await chatWithGemini(userMsg, env, conversationHistory);
+        } catch (error) {
+          console.error("AI Error:", error);
+          reply = `AI 处理失败: ${error.message || "未知错误"}`;
+        }
+
+        // 将 AI 回复添加到会话历史
+        conversationHistory.push({ role: "assistant", content: reply });
+        conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
+
+        // 更新会话历史到 KV 存储
+        await updateHistory(fromUserName, env.AI_CHAT_HISTORY, conversationHistory);
+      } else {
+        reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
       }
 
-      // 将 AI 回复添加到会话历史
-      conversationHistory.push({ role: "assistant", content: reply });
-      conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
-
-      // 更新会话历史到 KV 存储
-      await updateHistory(fromUserName, env.AI_CHAT_HISTORY, conversationHistory);
-
-
       const responseXML = formatXMLReply(msg.FromUserName, msg.ToUserName, reply);
-      return new Response(responseXML, { headers: { "Content-Type": "application/xml" } });
+      return new Response(responseXML, {
+        headers: { "Content-Type": "application/xml" }
+      });
     }
 
     return new Response("Invalid Request", { status: 405 });
@@ -75,7 +83,7 @@ function isCrawler(request) {
     return true;
   }
 
-  // 限制 Referer 来源
+  // 限制 Referer 
   if (referer && !referer.includes("weixin.qq.com")) {
     console.warn(`Blocked Referer: ${referer}`);
     return true;
@@ -96,15 +104,29 @@ function bufferToHex(buffer) {
   return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-// XML 解析 (保持不变)
+// 修改 parseXML 函数
 function parseXML(xml) {
-  const match = xml.match(/<Content><!\[CDATA\[(.*?)\]\]><\/Content>/);
-  return match ? { Content: match[1], FromUserName: extractTag(xml, "FromUserName"), ToUserName: extractTag(xml, "ToUserName") } : null;
+  const msgType = extractTag(xml, "MsgType");
+  const event = extractTag(xml, "Event");
+
+  return {
+    MsgType: msgType,
+    Event: event,
+    Content: msgType === "text" ? extractContentTag(xml) : "",
+    FromUserName: extractTag(xml, "FromUserName"),
+    ToUserName: extractTag(xml, "ToUserName")
+  };
 }
 
 // 提取 XML 标签 (保持不变)
 function extractTag(xml, tag) {
   const match = xml.match(new RegExp(`<${tag}><!\\[CDATA\\[(.*?)\\]\\]><\\/${tag}>`));
+  return match ? match[1] : "";
+}
+
+// 在 extractTag 函数后添加
+function extractContentTag(xml) {
+  const match = xml.match(/<Content><!\[CDATA\[(.*?)\]\]><\/Content>/);
   return match ? match[1] : "";
 }
 
