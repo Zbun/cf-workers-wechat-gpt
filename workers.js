@@ -1,8 +1,8 @@
 export default {
   async fetch(request, env) {
-    // if (isCrawler(request)) {
-    //   return new Response("Forbidden", { status: 403 });
-    // }
+    if (isCrawler(request)) {
+      return new Response("Forbidden", { status: 403 });
+    }
 
     const { searchParams } = new URL(request.url);
 
@@ -56,10 +56,10 @@ function isCrawler(request) {
   }
 
   // 限制 Referer 来源
-  if (referer && !referer.includes("weixin.qq.com")) {
-    console.warn(`Blocked Referer: ${referer}`);
-    return true;
-  }
+  // if (referer && !referer.includes("weixin.qq.com")) {
+  //   console.warn(`Blocked Referer: ${referer}`);
+  //   return true;
+  // }
 
   return false;
 }
