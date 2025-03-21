@@ -139,7 +139,8 @@ function extractContentTag(xml) {
 
 // 与 OpenAI 聊天 (修改后，接收 history 参数)
 async function chatWithOpenAI(msg, env, history) {
-  const url = `${env.OPENAI_BASE_URL}/chat/completions`;
+  const baseUrl = env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  const url = `${baseUrl}/chat/completions`;
 
   // 构建包含历史记录的消息数组
   const messages = [
