@@ -19,7 +19,9 @@
 3. 获取微信公众号开发者信息
 4. 准备 OpenAI 或 Gemini API 密钥
 
-### 2. 配置 KV 存储
+### 2. 配置 KV 存储 (可选)
+
+如果需要支持会话历史记录功能：
 
 1. 在 Cloudflare Workers 控制台创建一个 KV 命名空间（用于存储聊天历史）
 2. 命名为 `AI_CHAT_HISTORY` 或自定义名称
@@ -43,7 +45,7 @@
 | `GEMINI_SYSTEM_PROMPT` | Gemini 预置角色 Prompt | ❌ |
 | `CHAT_HISTORY_LIMIT` | 对话历史记录保存条数，默认为 2 | ❌ |
 | `UNSUPPORTED_MESSAGE` | 收到不支持类型消息的回复 | ❌ |
-| `AI_CHAT_HISTORY` | 聊天历史记录 KV 存储绑定名称 | ✅ |
+| `AI_CHAT_HISTORY` | 聊天历史记录 KV 存储绑定名称（没有设置则不保存历史） | ❌ |
 
 **如何设置环境变量？**
 1. 进入 Cloudflare Workers -> 选择你的 Worker -> Settings（设置）
@@ -68,7 +70,7 @@
 
 ## 注意事项
 
-- 确保 KV 存储已正确绑定，否则会话历史功能无法使用
+- 如果要使用会话历史功能，需配置 KV 存储绑定，否则每次对话都是独立的
 - 对于高流量公众号，请考虑 Cloudflare Workers 的使用限制
 - AI 接口可能存在访问限制，请确保 API Key 有效
 

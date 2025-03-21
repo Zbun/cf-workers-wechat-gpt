@@ -47,12 +47,16 @@ async function handlePostRequest(request, env) {
     // 从环境变量获取历史记录限制数，默认为 2
     const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
 
+    // 检查是否有 KV 存储可用
+    const hasKVStorage = env.AI_CHAT_HISTORY != null;
+
     // 获取会话历史
-    let conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY);
+    let conversationHistory = hasKVStorage ?
+      await getHistory(fromUserName, env.AI_CHAT_HISTORY) : [];
 
     // 将用户消息添加到会话历史
     conversationHistory.push({ role: "user", content: userMsg });
-    conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
+    conversationHistory = trimHistory(conversationHistory, historyLimit);
 
     try {
       reply = useOpenAI ? await chatWithOpenAI(userMsg, env, conversationHistory) : await chatWithGemini(userMsg, env, conversationHistory);
@@ -63,10 +67,12 @@ async function handlePostRequest(request, env) {
 
     // 将 AI 回复添加到会话历史
     conversationHistory.push({ role: "assistant", content: reply });
-    conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
+    conversationHistory = trimHistory(conversationHistory, historyLimit);
 
-    // 更新会话历史到 KV 存储
-    await updateHistory(fromUserName, env.AI_CHAT_HISTORY, conversationHistory);
+    // 更新会话历史到 KV 存储 (如果可用)
+    if (hasKVStorage) {
+      await updateHistory(fromUserName, env.AI_CHAT_HISTORY, conversationHistory);
+    }
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
   }
@@ -239,7 +245,6 @@ function trimHistory(history, limit) {
 // 从 KV 获取会话历史
 async function getHistory(userId, kvNamespace) {
   if (!userId || !kvNamespace) {
-    console.warn("获取会话历史失败: 缺少必要参数");
     return [];
   }
 
@@ -263,9 +268,9 @@ async function getHistory(userId, kvNamespace) {
 // 更新会话历史到 KV
 async function updateHistory(userId, kvNamespace, history) {
   if (!userId || !kvNamespace) {
-    console.error("更新会话历史失败: 缺少必要参数");
     return;
   }
+
   // 确保 history 是数组
   const safeHistory = Array.isArray(history) ? history : [];
 
