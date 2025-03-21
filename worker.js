@@ -4,71 +4,78 @@ export default {
       return new Response("Forbidden", { status: 403 });
     }
 
-    const { searchParams } = new URL(request.url);
-
     if (request.method === "GET") {
-      const signature = searchParams.get("signature");
-      const timestamp = searchParams.get("timestamp");
-      const nonce = searchParams.get("nonce");
-      const echostr = searchParams.get("echostr");
-
-      if (checkSignature(signature, timestamp, nonce, env.WECHAT_TOKEN)) {
-        return new Response(echostr, { status: 200 });
-      }
-      return new Response("Invalid signature", { status: 403 });
+      return handleGetRequest(request, env);
     }
 
     if (request.method === "POST") {
-      const text = await request.text();
-      const msg = parseXML(text);
-      if (!msg) return new Response("Invalid XML", { status: 400 });
-
-      let reply;
-
-      // 处理关注事件
-      if (msg.MsgType === "event" && msg.Event.toLowerCase() === "subscribe") {
-        reply = env.WELCOME_MESSAGE || "感谢关注！我是基于 AI 的智能助手，可以回答您的各种问题。";
-      } else if (msg.MsgType === "text") {
-        const useOpenAI = env.USE_OPENAI === "true";
-        const userMsg = msg.Content;
-        const fromUserName = msg.FromUserName;
-
-        // 从环境变量获取历史记录限制数，默认为 2
-        const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
-
-        // 获取会话历史
-        let conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY);
-
-        // 将用户消息添加到会话历史
-        conversationHistory.push({ role: "user", content: userMsg });
-        conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
-
-        try {
-          reply = useOpenAI ? await chatWithOpenAI(userMsg, env, conversationHistory) : await chatWithGemini(userMsg, env, conversationHistory);
-        } catch (error) {
-          console.error("AI Error:", error);
-          reply = `AI 处理失败: ${error.message || "未知错误"}`;
-        }
-
-        // 将 AI 回复添加到会话历史
-        conversationHistory.push({ role: "assistant", content: reply });
-        conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
-
-        // 更新会话历史到 KV 存储
-        await updateHistory(fromUserName, env.AI_CHAT_HISTORY, conversationHistory);
-      } else {
-        reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
-      }
-
-      const responseXML = formatXMLReply(msg.FromUserName, msg.ToUserName, reply);
-      return new Response(responseXML, {
-        headers: { "Content-Type": "application/xml" }
-      });
+      return handlePostRequest(request, env);
     }
 
     return new Response("Invalid Request", { status: 405 });
   }
 };
+
+async function handleGetRequest(request, env) {
+  const { searchParams } = new URL(request.url);
+  const signature = searchParams.get("signature");
+  const timestamp = searchParams.get("timestamp");
+  const nonce = searchParams.get("nonce");
+  const echostr = searchParams.get("echostr");
+
+  if (checkSignature(signature, timestamp, nonce, env.WECHAT_TOKEN)) {
+    return new Response(echostr, { status: 200 });
+  }
+  return new Response("Invalid signature", { status: 403 });
+}
+
+async function handlePostRequest(request, env) {
+  const text = await request.text();
+  const msg = parseXML(text);
+  if (!msg) return new Response("Invalid XML", { status: 400 });
+
+  let reply;
+
+  // 处理关注事件
+  if (msg.MsgType === "event" && msg.Event.toLowerCase() === "subscribe") {
+    reply = env.WELCOME_MESSAGE || "感谢关注！我是基于 AI 的智能助手，可以回答您的各种问题。";
+  } else if (msg.MsgType === "text") {
+    const useOpenAI = env.USE_OPENAI === "true";
+    const userMsg = msg.Content;
+    const fromUserName = msg.FromUserName;
+
+    // 从环境变量获取历史记录限制数，默认为 2
+    const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
+
+    // 获取会话历史
+    let conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY);
+
+    // 将用户消息添加到会话历史
+    conversationHistory.push({ role: "user", content: userMsg });
+    conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
+
+    try {
+      reply = useOpenAI ? await chatWithOpenAI(userMsg, env, conversationHistory) : await chatWithGemini(userMsg, env, conversationHistory);
+    } catch (error) {
+      console.error("AI Error:", error);
+      reply = `AI 处理失败: ${error.message || "未知错误"}`;
+    }
+
+    // 将 AI 回复添加到会话历史
+    conversationHistory.push({ role: "assistant", content: reply });
+    conversationHistory = trimHistory(conversationHistory, historyLimit); // 使用变量替代固定值
+
+    // 更新会话历史到 KV 存储
+    await updateHistory(fromUserName, env.AI_CHAT_HISTORY, conversationHistory);
+  } else {
+    reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
+  }
+
+  const responseXML = formatXMLReply(msg.FromUserName, msg.ToUserName, reply);
+  return new Response(responseXML, {
+    headers: { "Content-Type": "application/xml" }
+  });
+}
 
 // 🚨 防爬虫方法 (保持不变)
 function isCrawler(request) {
@@ -165,15 +172,31 @@ async function chatWithOpenAI(msg, env, history) {
 async function chatWithGemini(msg, env, history) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
 
-  // Gemini 的上下文处理方式可能与 OpenAI 不同，这里简单将历史记录拼接在消息前 (更严谨的做法需要参考 Gemini API 文档构建 context)
-  let historyText = history.map(item => `${item.role === 'user' ? '用户: ' : 'AI: '}${item.content}`).join('\n');
-  const prompt = historyText + '\n' + msg; // 将历史记录和当前消息拼接成一个 prompt
+  // 转换历史记录为 Gemini 格式的对话
+  const contents = [{
+    role: "user",
+    parts: [{ text: env.GEMINI_SYSTEM_PROMPT || "你是一个有帮助的AI助手" }]
+  }];
+
+  // 添加历史对话
+  for (const item of history) {
+    contents.push({
+      role: item.role === "user" ? "user" : "model",
+      parts: [{ text: item.content }]
+    });
+  }
+
+  // 添加当前消息
+  contents.push({
+    role: "user",
+    parts: [{ text: msg }]
+  });
 
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) // 使用拼接了历史记录的 prompt
+      body: JSON.stringify({ contents })
     });
 
     const data = await response.json();
@@ -221,14 +244,19 @@ async function getHistory(userId, kvNamespace) {
 
   try {
     const historyString = await kvNamespace.get(userId);
-    if (historyString) {
+    if (!historyString) return [];
+
+    try {
       const parsed = JSON.parse(historyString);
       return Array.isArray(parsed) ? parsed : [];
+    } catch (parseError) {
+      console.error("会话历史解析失败:", parseError);
+      return [];
     }
   } catch (error) {
-    console.warn("获取会话历史失败:", error);
+    console.error("从KV获取历史失败:", error);
+    return [];
   }
-  return [];
 }
 
 // 更新会话历史到 KV
@@ -237,7 +265,6 @@ async function updateHistory(userId, kvNamespace, history) {
     console.error("更新会话历史失败: 缺少必要参数");
     return;
   }
-
   // 确保 history 是数组
   const safeHistory = Array.isArray(history) ? history : [];
 
