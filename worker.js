@@ -40,7 +40,7 @@ async function handlePostRequest(request, env) {
   if (msg.MsgType === "event" && msg.Event.toLowerCase() === "subscribe") {
     reply = env.WELCOME_MESSAGE || "感谢关注！我是基于 AI 的智能助手，可以回答您的各种问题。";
   } else if (msg.MsgType === "text") {
-    const useOpenAI = env.USE_OPENAI === "true";
+    const useOpenAI = env.USE_OPENAI === "1";
     const userMsg = msg.Content;
     const fromUserName = msg.FromUserName;
 
