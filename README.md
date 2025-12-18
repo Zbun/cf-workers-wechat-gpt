@@ -35,7 +35,7 @@
 | ------ | ----- | ----- |
 | `WECHAT_TOKEN` | 公众号 Token，用于校验请求合法性 | ✅ |
 | `WELCOME_MESSAGE` | 订阅时自动回复欢迎语 | ❌ |
-| `USE_OPENAI` | `true` 使用 OpenAI，`false` 使用 Gemini | ✅ |
+| `USE_OPENAI` | `1` 使用 OpenAI，`0` 使用 Gemini | ✅ |
 | `OPENAI_API_KEY` | OpenAI API Key | 使用 OpenAI 时必填 |
 | `OPENAI_BASE_URL` | OpenAI API Base URL（支持代理），默认为官方 API 地址 | ❌ |
 | `OPENAI_MODEL` | OpenAI 选择的模型，例如 `gpt-4-turbo` | 使用 OpenAI 时必填 |
