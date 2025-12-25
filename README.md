@@ -44,7 +44,15 @@
 需要 KV 存储支持：
 
 1. Workers 控制台 → Storage & Databases → KV → 创建命名空间
-2. Worker Settings → Bindings → 添加 KV，变量名填 `AI_CHAT_HISTORY`
+2. 复制命名空间的 ID
+3. 在 `wrangler.toml` 中配置 KV 绑定：
+   ```toml
+   kv_namespaces = [
+     { binding = "AI_CHAT_HISTORY", id = "你的KV命名空间ID" }
+   ]
+   ```
+
+> 💡 **提示**：通过 `wrangler.toml` 配置 KV 绑定可实现持久化，避免每次部署后需要手动重新绑定。
 
 ## 相关链接
 

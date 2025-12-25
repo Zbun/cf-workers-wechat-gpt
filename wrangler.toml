@@ -4,8 +4,8 @@ compatibility_date = "2023-10-30"
 keep_vars = true  # 保持 Dashboard 配置的环境变量
 
 # 如需 KV 存储会话历史，取消注释并填写 ID
-# kv_namespaces = [
-#   { binding = "AI_CHAT_HISTORY", id = "your-kv-id-here" }
-# ]
+kv_namespaces = [
+  { binding = "AI_CHAT_HISTORY", id = "ai_chat_history_kv" }
+]
 
 # 敏感变量在 Cloudflare Dashboard 或 GitHub Secrets 中设置
