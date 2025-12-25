@@ -23,7 +23,14 @@ async function handleGetRequest(request, env) {
   const nonce = searchParams.get("nonce");
   const echostr = searchParams.get("echostr");
 
-  if (checkSignature(signature, timestamp, nonce, env.WECHAT_TOKEN)) {
+  // 校验时间戳有效性（5分钟内）
+  if (!isTimestampValid(timestamp, 300)) {
+    console.warn(`Invalid timestamp: ${timestamp}`);
+    return new Response("Invalid timestamp", { status: 403 });
+  }
+
+  // 修复：使用 await 等待签名校验结果
+  if (await checkSignature(signature, timestamp, nonce, env.WECHAT_TOKEN)) {
     return new Response(echostr, { status: 200 });
   }
   return new Response("Invalid signature", { status: 403 });
@@ -83,26 +90,51 @@ async function handlePostRequest(request, env) {
   });
 }
 
-// 🚨 防爬虫方法 (保持不变)
+// 🚨 防爬虫方法（增强版）
 function isCrawler(request) {
   const userAgent = request.headers.get("User-Agent") || "";
   const referer = request.headers.get("Referer") || "";
-  const forbiddenAgents = ["curl", "wget", "Python-requests", "Scrapy", "bot", "spider"];
-  const forbiddenReferers = ["http://", "https://", "example.com"]; // 可修改为自己的白名单
 
-  // 拦截常见爬虫 UA
-  if (forbiddenAgents.some(bot => userAgent.toLowerCase().includes(bot))) {
-    console.warn(`Blocked Crawler: ${userAgent}`);
+  // 扩充爬虫 UA 黑名单
+  const forbiddenAgents = [
+    "curl", "wget", "python", "scrapy", "bot", "spider", "crawl",
+    "httpclient", "java", "okhttp", "axios", "node-fetch", "postman",
+    "insomnia", "httpie", "aiohttp", "go-http-client", "ruby"
+  ];
+
+  // 空 User-Agent 直接拦截（正常浏览器/微信必有 UA）
+  if (!userAgent || userAgent.length < 10) {
+    console.warn("Blocked: Empty or suspicious User-Agent");
     return true;
   }
 
-  // 限制 Referer 
-  if (referer && !referer.includes("weixin.qq.com")) {
-    console.warn(`Blocked Referer: ${referer}`);
+  // 拦截常见爬虫 UA
+  const uaLower = userAgent.toLowerCase();
+  if (forbiddenAgents.some(bot => uaLower.includes(bot))) {
+    console.warn(`Blocked Crawler UA: ${userAgent.substring(0, 100)}`);
+    return true;
+  }
+
+  // Referer 检查：如果存在 Referer 且不是微信域名，则拦截
+  if (referer && !referer.includes("weixin.qq.com") && !referer.includes("qq.com")) {
+    console.warn(`Blocked Referer: ${referer.substring(0, 100)}`);
     return true;
   }
 
   return false;
+}
+
+// 时间戳有效性校验（防止重放攻击）
+function isTimestampValid(timestamp, maxAgeSeconds = 300) {
+  if (!timestamp) return false;
+
+  const requestTime = parseInt(timestamp, 10);
+  if (isNaN(requestTime)) return false;
+
+  const now = Math.floor(Date.now() / 1000);
+  const diff = Math.abs(now - requestTime);
+
+  return diff <= maxAgeSeconds;
 }
 
 // 微信签名校验 (保持不变)
