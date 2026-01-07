@@ -54,16 +54,17 @@ async function handlePostRequest(request, env) {
     // 从环境变量获取历史记录限制数，默认为 2
     const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
 
-    // 检查是否有 KV 存储可用
-    const hasKVStorage = env.AI_CHAT_HISTORY != null;
+    // 检查是否有 D1 存储可用
+    const hasD1Storage = env.AI_CHAT_HISTORY_DB != null;
+
+    // 初始化数据库表（如果需要）
+    if (hasD1Storage) {
+      await initDatabase(env.AI_CHAT_HISTORY_DB);
+    }
 
     // 获取会话历史
-    let conversationHistory = hasKVStorage ?
-      await getHistory(fromUserName, env.AI_CHAT_HISTORY) : [];
-
-    // 将用户消息添加到会话历史
-    conversationHistory.push({ role: "user", content: userMsg });
-    conversationHistory = trimHistory(conversationHistory, historyLimit);
+    let conversationHistory = hasD1Storage ?
+      await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit) : [];
 
     try {
       reply = useOpenAI ? await chatWithOpenAI(userMsg, env, conversationHistory) : await chatWithGemini(userMsg, env, conversationHistory);
@@ -72,13 +73,10 @@ async function handlePostRequest(request, env) {
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
     }
 
-    // 将 AI 回复添加到会话历史
-    conversationHistory.push({ role: "assistant", content: reply });
-    conversationHistory = trimHistory(conversationHistory, historyLimit);
-
-    // 更新会话历史到 KV 存储 (如果可用)
-    if (hasKVStorage) {
-      await updateHistory(fromUserName, env.AI_CHAT_HISTORY, conversationHistory);
+    // 保存用户消息和 AI 回复到 D1 (如果可用)
+    if (hasD1Storage) {
+      await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
+      await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
     }
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
@@ -259,56 +257,63 @@ function formatXMLReply(to, from, content) {
   </xml>`;
 }
 
-// --------  新增的 KV 历史记录操作函数  --------
+// --------  D1 历史记录操作函数  --------
 
-// 裁剪会话历史，保持指定长度
-function trimHistory(history, limit) {
-  // 确保 history 是数组且不为空
-  if (!Array.isArray(history)) {
-    return [];
+// 初始化数据库表
+async function initDatabase(db) {
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at INTEGER DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_id ON chat_history(user_id);
+    `);
+  } catch (error) {
+    // 表已存在时忽略错误
+    console.log("数据库初始化:", error.message);
   }
-
-  if (history.length > limit) {
-    return history.slice(history.length - limit); // 保留最新的 limit 条记录
-  }
-  return history;
 }
 
-// 从 KV 获取会话历史
-async function getHistory(userId, kvNamespace) {
-  if (!userId || !kvNamespace) {
+// 从 D1 获取会话历史
+async function getHistory(userId, db, limit) {
+  if (!userId || !db) {
     return [];
   }
 
   try {
-    const historyString = await kvNamespace.get(userId);
-    if (!historyString) return [];
+    const { results } = await db.prepare(
+      `SELECT role, content FROM chat_history 
+       WHERE user_id = ? 
+       ORDER BY id DESC 
+       LIMIT ?`
+    ).bind(userId, limit).all();
 
-    try {
-      const parsed = JSON.parse(historyString);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (parseError) {
-      console.error("会话历史解析失败:", parseError);
-      return [];
-    }
+    // 结果是倒序的，需要反转
+    return results.reverse().map(row => ({
+      role: row.role,
+      content: row.content
+    }));
   } catch (error) {
-    console.error("从KV获取历史失败:", error);
+    console.error("从D1获取历史失败:", error);
     return [];
   }
 }
 
-// 更新会话历史到 KV
-async function updateHistory(userId, kvNamespace, history) {
-  if (!userId || !kvNamespace) {
+// 保存单条消息到 D1
+async function saveMessage(userId, role, content, db) {
+  if (!userId || !db) {
     return;
   }
 
-  // 确保 history 是数组
-  const safeHistory = Array.isArray(history) ? history : [];
-
   try {
-    await kvNamespace.put(userId, JSON.stringify(safeHistory));
+    await db.prepare(
+      `INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)`
+    ).bind(userId, role, content).run();
   } catch (error) {
-    console.error("更新会话历史失败:", error);
+    console.error("保存消息失败:", error);
   }
 }

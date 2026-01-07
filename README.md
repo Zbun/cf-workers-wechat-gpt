@@ -41,12 +41,12 @@
 
 ## 会话历史（可选）
 
-需要 KV 存储支持：
+需要 D1 数据库支持（免费额度更高）：
 
-1. Workers 控制台 → Storage & Databases → KV → 创建命名空间
-2. Worker Settings → Bindings → 添加 KV，变量名填 `AI_CHAT_HISTORY`
+1. Workers 控制台 → Storage & Databases → D1 → 创建数据库
+2. Worker Settings → Bindings → 添加 D1，变量名填 `AI_CHAT_HISTORY_DB`
 
-> ⚠️ **注意**：由于 Cloudflare 的限制，每次重新部署 Worker 后 KV 绑定会丢失，需要手动重新绑定。虽然可以在 `wrangler.toml` 中配置 KV ID 实现持久化，但命名空间 ID 属于敏感信息，不建议提交到公开仓库。
+> ⚠️ **注意**：由于 Cloudflare 的限制，每次重新部署 Worker 后 D1 绑定会丢失，需要手动重新绑定。虽然可以在 `wrangler.toml` 中配置数据库 ID 实现持久化，但 ID 属于敏感信息，不建议提交到公开仓库。
 
 ## 相关链接
 
