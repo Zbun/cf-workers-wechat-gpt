@@ -55,7 +55,8 @@ async function handlePostRequest(request, env) {
     const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
 
     // 检查是否有 D1 存储可用
-    const hasD1Storage = env.AI_CHAT_HISTORY_DB != null;
+    const hasD1Storage = typeof env.AI_CHAT_HISTORY_DB !== 'undefined' && env.AI_CHAT_HISTORY_DB !== null;
+    console.log("D1 存储状态:", hasD1Storage, "绑定对象:", typeof env.AI_CHAT_HISTORY_DB);
 
     // 初始化数据库表（如果需要）
     if (hasD1Storage) {
@@ -63,8 +64,11 @@ async function handlePostRequest(request, env) {
     }
 
     // 获取会话历史
-    let conversationHistory = hasD1Storage ?
-      await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit) : [];
+    let conversationHistory = [];
+    if (hasD1Storage) {
+      conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
+      console.log("获取到历史记录:", conversationHistory.length, "条");
+    }
 
     try {
       reply = useOpenAI ? await chatWithOpenAI(userMsg, env, conversationHistory) : await chatWithGemini(userMsg, env, conversationHistory);
