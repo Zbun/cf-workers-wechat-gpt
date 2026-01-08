@@ -1,5 +1,10 @@
+// 内存缓存：key = userId, value = { history: [], expireAt: timestamp }
+const chatCache = new Map();
+const CACHE_TTL = 10 * 60 * 1000; // 10分钟过期
+const MAX_HISTORY = 4; // 保留4轮对话（8条消息）
+
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     if (isCrawler(request)) {
       return new Response("Forbidden", { status: 403 });
     }
@@ -9,7 +14,7 @@ export default {
     }
 
     if (request.method === "POST") {
-      return handlePostRequest(request, env, ctx);
+      return handlePostRequest(request, env);
     }
 
     return new Response("Invalid Request", { status: 405 });
@@ -23,27 +28,24 @@ async function handleGetRequest(request, env) {
   const nonce = searchParams.get("nonce");
   const echostr = searchParams.get("echostr");
 
-  // 校验时间戳有效性（5分钟内）
   if (!isTimestampValid(timestamp, 300)) {
     console.warn(`Invalid timestamp: ${timestamp}`);
     return new Response("Invalid timestamp", { status: 403 });
   }
 
-  // 修复：使用 await 等待签名校验结果
   if (await checkSignature(signature, timestamp, nonce, env.WECHAT_TOKEN)) {
     return new Response(echostr, { status: 200 });
   }
   return new Response("Invalid signature", { status: 403 });
 }
 
-async function handlePostRequest(request, env, ctx) {
+async function handlePostRequest(request, env) {
   const text = await request.text();
   const msg = parseXML(text);
   if (!msg) return new Response("Invalid XML", { status: 400 });
 
   let reply;
 
-  // 处理关注事件
   if (msg.MsgType === "event" && msg.Event.toLowerCase() === "subscribe") {
     reply = env.WELCOME_MESSAGE || "感谢关注！我是基于 AI 的智能助手，可以回答您的各种问题。";
   } else if (msg.MsgType === "text") {
@@ -51,37 +53,20 @@ async function handlePostRequest(request, env, ctx) {
     const userMsg = msg.Content;
     const fromUserName = msg.FromUserName;
 
-    // 从环境变量获取历史记录限制数，默认为 4
-    const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 4;
-
-    // 检查是否有 D1 存储可用
-    const hasD1Storage = typeof env.AI_CHAT_HISTORY_DB !== 'undefined' && env.AI_CHAT_HISTORY_DB !== null;
-
-    // 获取会话历史（查询失败时返回空数组继续处理）
-    let conversationHistory = [];
-    if (hasD1Storage) {
-      try {
-        conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
-      } catch (e) {
-        // 表不存在或查询失败时忽略，继续处理
-      }
-    }
+    // 获取或创建用户缓存
+    const conversationHistory = getHistory(fromUserName);
 
     try {
-      reply = useOpenAI ? await chatWithOpenAI(userMsg, env, conversationHistory) : await chatWithGemini(userMsg, env, conversationHistory);
+      reply = useOpenAI
+        ? await chatWithOpenAI(userMsg, env, conversationHistory)
+        : await chatWithGemini(userMsg, env, conversationHistory);
     } catch (error) {
       console.error("AI Error:", error);
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
     }
 
-    // 保存操作放到响应后执行（使用 waitUntil）
-    if (hasD1Storage && ctx) {
-      ctx.waitUntil((async () => {
-        await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
-        await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
-        await cleanOldMessages(fromUserName, env.AI_CHAT_HISTORY_DB, 1000);
-      })());
-    }
+    // 更新缓存（不阻塞响应）
+    updateHistory(fromUserName, userMsg, reply);
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
   }
@@ -92,32 +77,72 @@ async function handlePostRequest(request, env, ctx) {
   });
 }
 
-// 🚨 防爬虫方法（增强版）
+// -------- 内存缓存操作 --------
+
+function getHistory(userId) {
+  const cached = chatCache.get(userId);
+  if (cached && cached.expireAt > Date.now()) {
+    return cached.history;
+  }
+  // 过期或不存在，清理并返回空
+  chatCache.delete(userId);
+  return [];
+}
+
+function updateHistory(userId, userMsg, assistantReply) {
+  let history = getHistory(userId);
+
+  // 添加新对话
+  history.push({ role: "user", content: userMsg });
+  history.push({ role: "assistant", content: assistantReply });
+
+  // 保留最近 MAX_HISTORY 轮（每轮2条）
+  if (history.length > MAX_HISTORY * 2) {
+    history = history.slice(-MAX_HISTORY * 2);
+  }
+
+  // 更新缓存
+  chatCache.set(userId, {
+    history,
+    expireAt: Date.now() + CACHE_TTL
+  });
+
+  // 清理过期缓存（异步执行，不阻塞）
+  cleanExpiredCache();
+}
+
+function cleanExpiredCache() {
+  const now = Date.now();
+  for (const [userId, cached] of chatCache.entries()) {
+    if (cached.expireAt <= now) {
+      chatCache.delete(userId);
+    }
+  }
+}
+
+// -------- 辅助函数 --------
+
 function isCrawler(request) {
   const userAgent = request.headers.get("User-Agent") || "";
   const referer = request.headers.get("Referer") || "";
 
-  // 扩充爬虫 UA 黑名单
   const forbiddenAgents = [
     "curl", "wget", "python", "scrapy", "bot", "spider", "crawl",
     "httpclient", "java", "okhttp", "axios", "node-fetch", "postman",
     "insomnia", "httpie", "aiohttp", "go-http-client", "ruby"
   ];
 
-  // 空 User-Agent 直接拦截（正常浏览器/微信必有 UA）
   if (!userAgent || userAgent.length < 10) {
     console.warn("Blocked: Empty or suspicious User-Agent");
     return true;
   }
 
-  // 拦截常见爬虫 UA
   const uaLower = userAgent.toLowerCase();
   if (forbiddenAgents.some(bot => uaLower.includes(bot))) {
     console.warn(`Blocked Crawler UA: ${userAgent.substring(0, 100)}`);
     return true;
   }
 
-  // Referer 检查：如果存在 Referer 且不是微信域名，则拦截
   if (referer && !referer.includes("weixin.qq.com") && !referer.includes("qq.com")) {
     console.warn(`Blocked Referer: ${referer.substring(0, 100)}`);
     return true;
@@ -126,36 +151,27 @@ function isCrawler(request) {
   return false;
 }
 
-// 时间戳有效性校验（防止重放攻击）
 function isTimestampValid(timestamp, maxAgeSeconds = 300) {
   if (!timestamp) return false;
-
   const requestTime = parseInt(timestamp, 10);
   if (isNaN(requestTime)) return false;
-
   const now = Math.floor(Date.now() / 1000);
-  const diff = Math.abs(now - requestTime);
-
-  return diff <= maxAgeSeconds;
+  return Math.abs(now - requestTime) <= maxAgeSeconds;
 }
 
-// 微信签名校验 (保持不变)
 function checkSignature(signature, timestamp, nonce, token) {
   const tempStr = [token, timestamp, nonce].sort().join("");
   const hash = new Uint8Array(new TextEncoder().encode(tempStr));
-  return crypto.subtle.digest("SHA-1", hash).then(bufferToHex).then(hash => hash === signature);
+  return crypto.subtle.digest("SHA-1", hash).then(bufferToHex).then(h => h === signature);
 }
 
-// buffer to hex (保持不变)
 function bufferToHex(buffer) {
   return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-// 修改 parseXML 函数
 function parseXML(xml) {
   const msgType = extractTag(xml, "MsgType");
   const event = extractTag(xml, "Event");
-
   return {
     MsgType: msgType,
     Event: event,
@@ -165,38 +181,33 @@ function parseXML(xml) {
   };
 }
 
-// 提取 XML 标签 (保持不变)
 function extractTag(xml, tag) {
-  const match = xml.match(new RegExp(`<${tag}><!\\[CDATA\\[(.*?)\\]\\]><\\/${tag}>`));
+  const match = xml.match(new RegExp(`<${tag}><![CDATA[(.*?)]]></${tag}>`));
   return match ? match[1] : "";
 }
 
-// 在 extractTag 函数后添加
 function extractContentTag(xml) {
   const match = xml.match(/<Content><!\[CDATA\[(.*?)\]\]><\/Content>/);
   return match ? match[1] : "";
 }
 
-// 与 OpenAI 聊天 (修改后，接收 history 参数)
+// -------- AI 调用 --------
+
 async function chatWithOpenAI(msg, env, history) {
   const baseUrl = env.OPENAI_BASE_URL || "https://api.openai.com/v1";
   const url = `${baseUrl}/chat/completions`;
 
-  // 构建包含历史记录的消息数组
   const messages = [
-    { role: "system", content: env.OPENAI_SYSTEM_PROMPT },
-    ...history, // 将会话历史加入 messages
-    { role: "user", content: msg } // 当前用户消息
+    { role: "system", content: env.OPENAI_SYSTEM_PROMPT || "你是一个有帮助的AI助手" },
+    ...history,
+    { role: "user", content: msg }
   ];
 
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        model: env.OPENAI_MODEL,
-        messages: messages // 使用包含历史记录的 messages
-      })
+      body: JSON.stringify({ model: env.OPENAI_MODEL, messages })
     });
 
     const data = await response.json();
@@ -209,17 +220,13 @@ async function chatWithOpenAI(msg, env, history) {
   }
 }
 
-// 与 Gemini 聊天 (修改后，接收 history 参数，Gemini 历史记录处理可能需要调整)
 async function chatWithGemini(msg, env, history) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
 
-  // 转换历史记录为 Gemini 格式的对话
-  const contents = [{
-    role: "user",
-    parts: [{ text: env.GEMINI_SYSTEM_PROMPT || "你是一个有帮助的AI助手" }]
-  }];
+  const contents = [
+    { role: "user", parts: [{ text: env.GEMINI_SYSTEM_PROMPT || "你是一个有帮助的AI助手" }] }
+  ];
 
-  // 添加历史对话
   for (const item of history) {
     contents.push({
       role: item.role === "user" ? "user" : "model",
@@ -227,11 +234,7 @@ async function chatWithGemini(msg, env, history) {
     });
   }
 
-  // 添加当前消息
-  contents.push({
-    role: "user",
-    parts: [{ text: msg }]
-  });
+  contents.push({ role: "user", parts: [{ text: msg }] });
 
   try {
     const response = await fetch(url, {
@@ -250,7 +253,6 @@ async function chatWithGemini(msg, env, history) {
   }
 }
 
-// XML 回复格式化 (保持不变)
 function formatXMLReply(to, from, content) {
   return `<xml>
     <ToUserName><![CDATA[${to}]]></ToUserName>
@@ -259,92 +261,4 @@ function formatXMLReply(to, from, content) {
     <MsgType><![CDATA[text]]></MsgType>
     <Content><![CDATA[${content}]]></Content>
   </xml>`;
-}
-
-// --------  D1 历史记录操作函数  --------
-
-// 初始化数据库表
-async function initDatabase(db) {
-  try {
-    // 分开执行，避免多语句问题
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS chat_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at INTEGER DEFAULT (unixepoch())
-      )
-    `).run();
-
-    await db.prepare(`
-      CREATE INDEX IF NOT EXISTS idx_user_id ON chat_history(user_id)
-    `).run();
-
-    console.log("数据库初始化成功");
-  } catch (error) {
-    // 表已存在时忽略错误
-    console.log("数据库初始化:", error.message);
-  }
-}
-
-// 从 D1 获取会话历史
-async function getHistory(userId, db, limit) {
-  if (!userId || !db) {
-    return [];
-  }
-
-  try {
-    const { results } = await db.prepare(
-      `SELECT role, content FROM chat_history 
-       WHERE user_id = ? 
-       ORDER BY id DESC 
-       LIMIT ?`
-    ).bind(userId, limit).all();
-
-    // 结果是倒序的，需要反转
-    return results.reverse().map(row => ({
-      role: row.role,
-      content: row.content
-    }));
-  } catch (error) {
-    console.error("从D1获取历史失败:", error);
-    return [];
-  }
-}
-
-// 保存单条消息到 D1
-async function saveMessage(userId, role, content, db) {
-  if (!userId || !db) return;
-
-  try {
-    await db.prepare(
-      `INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)`
-    ).bind(userId, role, content).run();
-  } catch (error) {
-    // 可能表不存在，尝试创建后重试
-    try {
-      await initDatabase(db);
-      await db.prepare(
-        `INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)`
-      ).bind(userId, role, content).run();
-    } catch (e) {
-      console.error("保存消息失败:", e);
-    }
-  }
-}
-
-// 清理旧数据，只保留最新的 N 条
-async function cleanOldMessages(userId, db, keepCount) {
-  if (!userId || !db) return;
-  try {
-    await db.prepare(`
-      DELETE FROM chat_history 
-      WHERE user_id = ? AND id NOT IN (
-        SELECT id FROM chat_history WHERE user_id = ? ORDER BY id DESC LIMIT ?
-      )
-    `).bind(userId, userId, keepCount).run();
-  } catch (error) {
-    console.error("清理旧数据失败:", error);
-  }
 }
