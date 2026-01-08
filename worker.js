@@ -209,7 +209,8 @@ async function chatWithOpenAI(msg, env, history) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
       body: JSON.stringify({
         model: env.OPENAI_MODEL,
-        messages: messages // 使用包含历史记录的 messages
+        messages: messages,
+        max_tokens: 500 // 限制输出长度，加快响应
       })
     });
 
