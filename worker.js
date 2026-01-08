@@ -1,5 +1,5 @@
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (isCrawler(request)) {
       return new Response("Forbidden", { status: 403 });
     }
@@ -9,7 +9,7 @@ export default {
     }
 
     if (request.method === "POST") {
-      return handlePostRequest(request, env);
+      return handlePostRequest(request, env, ctx);
     }
 
     return new Response("Invalid Request", { status: 405 });
@@ -36,7 +36,7 @@ async function handleGetRequest(request, env) {
   return new Response("Invalid signature", { status: 403 });
 }
 
-async function handlePostRequest(request, env) {
+async function handlePostRequest(request, env, ctx) {
   const text = await request.text();
   const msg = parseXML(text);
   if (!msg) return new Response("Invalid XML", { status: 400 });
@@ -74,12 +74,13 @@ async function handlePostRequest(request, env) {
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
     }
 
-    // 保存用户消息和 AI 回复到 D1 (如果可用)
-    if (hasD1Storage) {
-      await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
-      await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
-      // 清理旧数据，每用户保留 1000 条
-      cleanOldMessages(fromUserName, env.AI_CHAT_HISTORY_DB, 1000).catch(e => console.error("清理失败:", e));
+    // 保存操作放到响应后执行（使用 waitUntil）
+    if (hasD1Storage && ctx) {
+      ctx.waitUntil((async () => {
+        await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
+        await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
+        await cleanOldMessages(fromUserName, env.AI_CHAT_HISTORY_DB, 1000);
+      })());
     }
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
