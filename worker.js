@@ -1,5 +1,5 @@
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (isCrawler(request)) {
       return new Response("Forbidden", { status: 403 });
     }
@@ -9,7 +9,7 @@ export default {
     }
 
     if (request.method === "POST") {
-      return handlePostRequest(request, env);
+      return handlePostRequest(request, env, ctx);
     }
 
     return new Response("Invalid Request", { status: 405 });
