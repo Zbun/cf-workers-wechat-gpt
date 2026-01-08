@@ -1,5 +1,5 @@
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     if (isCrawler(request)) {
       return new Response("Forbidden", { status: 403 });
     }
@@ -9,7 +9,7 @@ export default {
     }
 
     if (request.method === "POST") {
-      return handlePostRequest(request, env, ctx);
+      return handlePostRequest(request, env);
     }
 
     return new Response("Invalid Request", { status: 405 });
@@ -36,13 +36,12 @@ async function handleGetRequest(request, env) {
   return new Response("Invalid signature", { status: 403 });
 }
 
-async function handlePostRequest(request, env, ctx) {
+async function handlePostRequest(request, env) {
   const text = await request.text();
   const msg = parseXML(text);
   if (!msg) return new Response("Invalid XML", { status: 400 });
 
   let reply;
-  let saveTask = null;
 
   // 处理关注事件
   if (msg.MsgType === "event" && msg.Event.toLowerCase() === "subscribe") {
@@ -57,16 +56,18 @@ async function handlePostRequest(request, env, ctx) {
 
     // 检查是否有 D1 存储可用
     const hasD1Storage = typeof env.AI_CHAT_HISTORY_DB !== 'undefined' && env.AI_CHAT_HISTORY_DB !== null;
+    console.log("D1 存储状态:", hasD1Storage, "绑定对象:", typeof env.AI_CHAT_HISTORY_DB);
 
-    // 获取会话历史（只查最近 historyLimit 条用于发送给 AI）
+    // 初始化数据库表（如果需要）
+    if (hasD1Storage) {
+      await initDatabase(env.AI_CHAT_HISTORY_DB);
+    }
+
+    // 获取会话历史
     let conversationHistory = [];
     if (hasD1Storage) {
-      try {
-        conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
-      } catch (e) {
-        // 表不存在时忽略错误，继续处理
-        console.log("获取历史失败（可能表未创建）:", e.message);
-      }
+      conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
+      console.log("获取到历史记录:", conversationHistory.length, "条");
     }
 
     try {
@@ -76,31 +77,18 @@ async function handlePostRequest(request, env, ctx) {
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
     }
 
-    // 准备保存任务（使用 waitUntil 在响应后执行）
+    // 保存用户消息和 AI 回复到 D1 (如果可用)
     if (hasD1Storage) {
-      saveTask = async () => {
-        try {
-          // 确保表存在（仅在保存时检查，不阻塞响应）
-          await initDatabase(env.AI_CHAT_HISTORY_DB);
-          await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
-          await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
-          await cleanOldMessages(fromUserName, env.AI_CHAT_HISTORY_DB, 1000);
-        } catch (e) {
-          console.error("保存消息失败:", e);
-        }
-      };
+      console.log("开始保存消息到 D1...");
+      await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
+      await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
+      console.log("消息保存完成");
     }
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
   }
 
   const responseXML = formatXMLReply(msg.FromUserName, msg.ToUserName, reply);
-
-  // 使用 waitUntil 在响应后继续执行保存操作
-  if (saveTask && ctx) {
-    ctx.waitUntil(saveTask());
-  }
-
   return new Response(responseXML, {
     headers: { "Content-Type": "application/xml" }
   });
@@ -209,8 +197,7 @@ async function chatWithOpenAI(msg, env, history) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
       body: JSON.stringify({
         model: env.OPENAI_MODEL,
-        messages: messages,
-        max_tokens: 500 // 限制输出长度，加快响应
+        messages: messages // 使用包含历史记录的 messages
       })
     });
 
@@ -340,23 +327,5 @@ async function saveMessage(userId, role, content, db) {
     ).bind(userId, role, content).run();
   } catch (error) {
     console.error("保存消息失败:", error);
-  }
-}
-
-// 清理旧数据，只保留最新的 N 条
-async function cleanOldMessages(userId, db, keepCount) {
-  if (!userId || !db) {
-    return;
-  }
-
-  try {
-    await db.prepare(`
-      DELETE FROM chat_history 
-      WHERE user_id = ? AND id NOT IN (
-        SELECT id FROM chat_history WHERE user_id = ? ORDER BY id DESC LIMIT ?
-      )
-    `).bind(userId, userId, keepCount).run();
-  } catch (error) {
-    console.error("清理旧数据失败:", error);
   }
 }
