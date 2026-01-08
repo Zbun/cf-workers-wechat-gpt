@@ -58,15 +58,15 @@ async function handlePostRequest(request, env, ctx) {
     // 检查是否有 D1 存储可用
     const hasD1Storage = typeof env.AI_CHAT_HISTORY_DB !== 'undefined' && env.AI_CHAT_HISTORY_DB !== null;
 
-    // 初始化数据库表（如果需要）
-    if (hasD1Storage) {
-      await initDatabase(env.AI_CHAT_HISTORY_DB);
-    }
-
     // 获取会话历史（只查最近 historyLimit 条用于发送给 AI）
     let conversationHistory = [];
     if (hasD1Storage) {
-      conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
+      try {
+        conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
+      } catch (e) {
+        // 表不存在时忽略错误，继续处理
+        console.log("获取历史失败（可能表未创建）:", e.message);
+      }
     }
 
     try {
@@ -80,6 +80,8 @@ async function handlePostRequest(request, env, ctx) {
     if (hasD1Storage) {
       saveTask = async () => {
         try {
+          // 确保表存在（仅在保存时检查，不阻塞响应）
+          await initDatabase(env.AI_CHAT_HISTORY_DB);
           await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
           await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
           await cleanOldMessages(fromUserName, env.AI_CHAT_HISTORY_DB, 1000);
