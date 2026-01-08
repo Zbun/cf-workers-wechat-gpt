@@ -56,18 +56,16 @@ async function handlePostRequest(request, env) {
 
     // 检查是否有 D1 存储可用
     const hasD1Storage = typeof env.AI_CHAT_HISTORY_DB !== 'undefined' && env.AI_CHAT_HISTORY_DB !== null;
-    console.log("D1 存储状态:", hasD1Storage, "绑定对象:", typeof env.AI_CHAT_HISTORY_DB);
 
     // 初始化数据库表（如果需要）
     if (hasD1Storage) {
       await initDatabase(env.AI_CHAT_HISTORY_DB);
     }
 
-    // 获取会话历史
+    // 获取会话历史（只查最近 historyLimit 条用于发送给 AI）
     let conversationHistory = [];
     if (hasD1Storage) {
       conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
-      console.log("获取到历史记录:", conversationHistory.length, "条");
     }
 
     try {
@@ -77,12 +75,11 @@ async function handlePostRequest(request, env) {
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
     }
 
-    // 保存用户消息和 AI 回复到 D1 (如果可用)
+    // 保存用户消息和 AI 回复到 D1 (如果可用，异步不阻塞响应)
     if (hasD1Storage) {
-      console.log("开始保存消息到 D1...");
-      await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
-      await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
-      console.log("消息保存完成");
+      // 不等待保存完成，避免影响响应速度
+      saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB).catch(e => console.error("保存用户消息失败:", e));
+      saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB).catch(e => console.error("保存AI回复失败:", e));
     }
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
