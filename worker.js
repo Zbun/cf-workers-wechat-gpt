@@ -56,18 +56,15 @@ async function handlePostRequest(request, env) {
 
     // 检查是否有 D1 存储可用
     const hasD1Storage = typeof env.AI_CHAT_HISTORY_DB !== 'undefined' && env.AI_CHAT_HISTORY_DB !== null;
-    console.log("D1 存储状态:", hasD1Storage, "绑定对象:", typeof env.AI_CHAT_HISTORY_DB);
 
-    // 初始化数据库表（如果需要）
-    if (hasD1Storage) {
-      await initDatabase(env.AI_CHAT_HISTORY_DB);
-    }
-
-    // 获取会话历史
+    // 获取会话历史（查询失败时返回空数组继续处理）
     let conversationHistory = [];
     if (hasD1Storage) {
-      conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
-      console.log("获取到历史记录:", conversationHistory.length, "条");
+      try {
+        conversationHistory = await getHistory(fromUserName, env.AI_CHAT_HISTORY_DB, historyLimit);
+      } catch (e) {
+        // 表不存在或查询失败时忽略，继续处理
+      }
     }
 
     try {
@@ -317,16 +314,22 @@ async function getHistory(userId, db, limit) {
 
 // 保存单条消息到 D1
 async function saveMessage(userId, role, content, db) {
-  if (!userId || !db) {
-    return;
-  }
+  if (!userId || !db) return;
 
   try {
     await db.prepare(
       `INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)`
     ).bind(userId, role, content).run();
   } catch (error) {
-    console.error("保存消息失败:", error);
+    // 可能表不存在，尝试创建后重试
+    try {
+      await initDatabase(db);
+      await db.prepare(
+        `INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)`
+      ).bind(userId, role, content).run();
+    } catch (e) {
+      console.error("保存消息失败:", e);
+    }
   }
 }
 
