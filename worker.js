@@ -79,10 +79,10 @@ async function handlePostRequest(request, env) {
 
     // 保存用户消息和 AI 回复到 D1 (如果可用)
     if (hasD1Storage) {
-      console.log("开始保存消息到 D1...");
       await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
       await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
-      console.log("消息保存完成");
+      // 清理旧数据，每用户保留 1000 条
+      cleanOldMessages(fromUserName, env.AI_CHAT_HISTORY_DB, 1000).catch(e => console.error("清理失败:", e));
     }
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
@@ -327,5 +327,20 @@ async function saveMessage(userId, role, content, db) {
     ).bind(userId, role, content).run();
   } catch (error) {
     console.error("保存消息失败:", error);
+  }
+}
+
+// 清理旧数据，只保留最新的 N 条
+async function cleanOldMessages(userId, db, keepCount) {
+  if (!userId || !db) return;
+  try {
+    await db.prepare(`
+      DELETE FROM chat_history 
+      WHERE user_id = ? AND id NOT IN (
+        SELECT id FROM chat_history WHERE user_id = ? ORDER BY id DESC LIMIT ?
+      )
+    `).bind(userId, userId, keepCount).run();
+  } catch (error) {
+    console.error("清理旧数据失败:", error);
   }
 }
