@@ -51,8 +51,8 @@ async function handlePostRequest(request, env) {
     const userMsg = msg.Content;
     const fromUserName = msg.FromUserName;
 
-    // 从环境变量获取历史记录限制数，默认为 2
-    const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 2;
+    // 从环境变量获取历史记录限制数，默认为 4
+    const historyLimit = parseInt(env.CHAT_HISTORY_LIMIT) || 4;
 
     // 检查是否有 D1 存储可用
     const hasD1Storage = typeof env.AI_CHAT_HISTORY_DB !== 'undefined' && env.AI_CHAT_HISTORY_DB !== null;
@@ -79,8 +79,10 @@ async function handlePostRequest(request, env) {
 
     // 保存用户消息和 AI 回复到 D1 (如果可用)
     if (hasD1Storage) {
+      console.log("开始保存消息到 D1...");
       await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
       await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
+      console.log("消息保存完成");
     }
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
@@ -266,16 +268,22 @@ function formatXMLReply(to, from, content) {
 // 初始化数据库表
 async function initDatabase(db) {
   try {
-    await db.exec(`
+    // 分开执行，避免多语句问题
+    await db.prepare(`
       CREATE TABLE IF NOT EXISTS chat_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         created_at INTEGER DEFAULT (unixepoch())
-      );
-      CREATE INDEX IF NOT EXISTS idx_user_id ON chat_history(user_id);
-    `);
+      )
+    `).run();
+
+    await db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_user_id ON chat_history(user_id)
+    `).run();
+
+    console.log("数据库初始化成功");
   } catch (error) {
     // 表已存在时忽略错误
     console.log("数据库初始化:", error.message);
