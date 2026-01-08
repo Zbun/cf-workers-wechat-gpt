@@ -75,12 +75,16 @@ async function handlePostRequest(request, env) {
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
     }
 
-    // 保存用户消息和 AI 回复到 D1 (如果可用，异步不阻塞响应)
+    // 保存用户消息和 AI 回复到 D1 (如果可用)
     if (hasD1Storage) {
-      // 不等待保存完成，避免影响响应速度
-      saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB).catch(e => console.error("保存用户消息失败:", e));
-      saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB).catch(e => console.error("保存AI回复失败:", e));
-      // 清理旧数据，每用户最多保留 1000 条（约 2MB，按 1000 用户共享 2GB 计算）
+      try {
+        // 等待保存完成，确保数据写入
+        await saveMessage(fromUserName, "user", userMsg, env.AI_CHAT_HISTORY_DB);
+        await saveMessage(fromUserName, "assistant", reply, env.AI_CHAT_HISTORY_DB);
+      } catch (e) {
+        console.error("保存消息失败:", e);
+      }
+      // 清理旧数据（异步，不阻塞响应）
       cleanOldMessages(fromUserName, env.AI_CHAT_HISTORY_DB, 1000).catch(e => console.error("清理旧数据失败:", e));
     }
   } else {
