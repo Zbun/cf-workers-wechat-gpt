@@ -2,7 +2,7 @@
 // kvVersion 记录从 KV 加载时的历史长度，用于决定是否需要写回 KV
 const chatCache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10分钟过期
-const MAX_HISTORY = 4; // 保留4轮对话（8条消息）
+const MAX_HISTORY_MESSAGES = 4; // 保留最近 4 条消息（2轮对话）
 const KV_WRITE_THRESHOLD = 2; // 历史变化超过 2 条时才写入 KV
 
 export default {
@@ -126,9 +126,9 @@ function updateHistoryHybrid(userId, userMsg, assistantReply, kvNamespace, ctx) 
   history.push({ role: "user", content: userMsg });
   history.push({ role: "assistant", content: assistantReply });
 
-  // 保留最近 MAX_HISTORY 轮（每轮2条）
-  if (history.length > MAX_HISTORY * 2) {
-    history = history.slice(-MAX_HISTORY * 2);
+  // 保留最近 MAX_HISTORY_MESSAGES 条消息
+  if (history.length > MAX_HISTORY_MESSAGES) {
+    history = history.slice(-MAX_HISTORY_MESSAGES);
   }
 
   // 更新内存缓存
