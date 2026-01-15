@@ -18,7 +18,7 @@
 | 变量名 | 作用 | 必填 |
 | ------ | ----- | ----- |
 | `WECHAT_TOKEN` | 公众号 Token | ✅ |
-| `USE_OPENAI` | `1` 使用 OpenAI，`0` 使用 Gemini | ✅ |
+| `USE_OPENAI` | `0` 使用 Gemini，默认使用 OpenAI | ❌ |
 | `OPENAI_API_KEY` | OpenAI API Key | 使用 OpenAI 时 |
 | `OPENAI_MODEL` | OpenAI 模型，如 `gpt-4-turbo` | 使用 OpenAI 时 |
 | `OPENAI_BASE_URL` | OpenAI 代理地址（如 OpenRouter） | ❌ |
