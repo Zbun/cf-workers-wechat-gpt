@@ -84,15 +84,15 @@ async function handlePostRequest(request, env, ctx) {
 // 混合读取：内存优先，未命中从 KV 加载
 async function getHistoryHybrid(userId, kvNamespace) {
   const cached = chatCache.get(userId);
-  
+
   // 内存命中且未过期
   if (cached && cached.expireAt > Date.now()) {
     return cached.history;
   }
-  
+
   // 内存未命中或已过期，尝试从 KV 读取
   chatCache.delete(userId);
-  
+
   if (kvNamespace) {
     try {
       const kvData = await kvNamespace.get(userId);
@@ -112,7 +112,7 @@ async function getHistoryHybrid(userId, kvNamespace) {
       console.warn("KV 读取失败:", error);
     }
   }
-  
+
   return [];
 }
 
@@ -150,7 +150,7 @@ function updateHistoryHybrid(userId, userMsg, assistantReply, kvNamespace, ctx) 
         }
       })
       .catch(err => console.error("KV 写入失败:", err));
-    
+
     // 异步执行，不阻塞响应
     if (ctx?.waitUntil) {
       ctx.waitUntil(writePromise);
@@ -232,7 +232,7 @@ function parseXML(xml) {
 }
 
 function extractTag(xml, tag) {
-  const match = xml.match(new RegExp(`<${tag}><![CDATA[(.*?)]]></${tag}>`));
+  const match = xml.match(new RegExp(`<${tag}><!\\[CDATA\\[(.*?)\\]\\]></${tag}>`));
   return match ? match[1] : "";
 }
 
