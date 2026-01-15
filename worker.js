@@ -1,10 +1,12 @@
-// 内存缓存：key = userId, value = { history: [], expireAt: timestamp }
+// 混合缓存：key = userId, value = { history, expireAt, kvVersion }
+// kvVersion 记录从 KV 加载时的历史长度，用于决定是否需要写回 KV
 const chatCache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10分钟过期
 const MAX_HISTORY = 4; // 保留4轮对话（8条消息）
+const KV_WRITE_THRESHOLD = 2; // 历史变化超过 2 条时才写入 KV
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (isCrawler(request)) {
       return new Response("Forbidden", { status: 403 });
     }
@@ -14,7 +16,7 @@ export default {
     }
 
     if (request.method === "POST") {
-      return handlePostRequest(request, env);
+      return handlePostRequest(request, env, ctx);
     }
 
     return new Response("Invalid Request", { status: 405 });
@@ -39,7 +41,7 @@ async function handleGetRequest(request, env) {
   return new Response("Invalid signature", { status: 403 });
 }
 
-async function handlePostRequest(request, env) {
+async function handlePostRequest(request, env, ctx) {
   const text = await request.text();
   const msg = parseXML(text);
   if (!msg) return new Response("Invalid XML", { status: 400 });
@@ -53,8 +55,8 @@ async function handlePostRequest(request, env) {
     const userMsg = msg.Content;
     const fromUserName = msg.FromUserName;
 
-    // 获取或创建用户缓存
-    const conversationHistory = getHistory(fromUserName);
+    // 混合读取：内存优先，未命中从 KV 加载
+    const conversationHistory = await getHistoryHybrid(fromUserName, env.AI_CHAT_HISTORY);
 
     try {
       reply = useOpenAI
@@ -65,8 +67,8 @@ async function handlePostRequest(request, env) {
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
     }
 
-    // 更新缓存（不阻塞响应）
-    updateHistory(fromUserName, userMsg, reply);
+    // 混合写入：更新内存缓存，条件写入 KV（不阻塞响应）
+    updateHistoryHybrid(fromUserName, userMsg, reply, env.AI_CHAT_HISTORY, ctx);
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
   }
@@ -77,20 +79,48 @@ async function handlePostRequest(request, env) {
   });
 }
 
-// -------- 内存缓存操作 --------
+// -------- 混合缓存操作 --------
 
-function getHistory(userId) {
+// 混合读取：内存优先，未命中从 KV 加载
+async function getHistoryHybrid(userId, kvNamespace) {
   const cached = chatCache.get(userId);
+  
+  // 内存命中且未过期
   if (cached && cached.expireAt > Date.now()) {
     return cached.history;
   }
-  // 过期或不存在，清理并返回空
+  
+  // 内存未命中或已过期，尝试从 KV 读取
   chatCache.delete(userId);
+  
+  if (kvNamespace) {
+    try {
+      const kvData = await kvNamespace.get(userId);
+      if (kvData) {
+        const history = JSON.parse(kvData);
+        if (Array.isArray(history)) {
+          // 加载到内存缓存，记录 KV 版本（当前长度）
+          chatCache.set(userId, {
+            history,
+            expireAt: Date.now() + CACHE_TTL,
+            kvVersion: history.length
+          });
+          return history;
+        }
+      }
+    } catch (error) {
+      console.warn("KV 读取失败:", error);
+    }
+  }
+  
   return [];
 }
 
-function updateHistory(userId, userMsg, assistantReply) {
-  let history = getHistory(userId);
+// 混合写入：立即更新内存，条件写入 KV
+function updateHistoryHybrid(userId, userMsg, assistantReply, kvNamespace, ctx) {
+  const cached = chatCache.get(userId);
+  let history = cached ? [...cached.history] : [];
+  const kvVersion = cached?.kvVersion || 0;
 
   // 添加新对话
   history.push({ role: "user", content: userMsg });
@@ -101,13 +131,33 @@ function updateHistory(userId, userMsg, assistantReply) {
     history = history.slice(-MAX_HISTORY * 2);
   }
 
-  // 更新缓存
+  // 更新内存缓存
   chatCache.set(userId, {
     history,
-    expireAt: Date.now() + CACHE_TTL
+    expireAt: Date.now() + CACHE_TTL,
+    kvVersion
   });
 
-  // 清理过期缓存（异步执行，不阻塞）
+  // 条件写入 KV：历史变化超过阈值时才写入
+  const changeCount = history.length - kvVersion;
+  if (kvNamespace && changeCount >= KV_WRITE_THRESHOLD) {
+    const writePromise = kvNamespace.put(userId, JSON.stringify(history))
+      .then(() => {
+        // 写入成功后更新 kvVersion
+        const current = chatCache.get(userId);
+        if (current) {
+          current.kvVersion = history.length;
+        }
+      })
+      .catch(err => console.error("KV 写入失败:", err));
+    
+    // 异步执行，不阻塞响应
+    if (ctx?.waitUntil) {
+      ctx.waitUntil(writePromise);
+    }
+  }
+
+  // 清理过期缓存
   cleanExpiredCache();
 }
 
