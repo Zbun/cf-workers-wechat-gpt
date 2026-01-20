@@ -33,7 +33,7 @@
 
 1. 登录微信公众平台 → 设置与开发 → 基本配置
 2. 服务器配置：
-   - **URL**: Worker 的 URL（如 `https://xxx.workers.dev`）
+   - **URL**: Worker 的 URL（如 `https://xxx.workers.dev/api/wechat`）
    - **Token**: 与 `WECHAT_TOKEN` 相同
    - **加密方式**: 明文模式
 3. 启用配置
