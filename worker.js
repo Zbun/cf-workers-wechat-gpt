@@ -5,6 +5,7 @@ const CACHE_TTL = 10 * 60 * 1000; // 10分钟过期
 const MAX_HISTORY_MESSAGES = 4; // 保留最近 4 条消息（2轮对话）
 const DEFAULT_AI_TIMEOUT_MS = 4500;
 const DEFAULT_CF_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_CLEAR_HISTORY_COMMANDS = ["清空上下文", "清空对话", "重置对话", "/reset"];
 
 export default {
   async fetch(request, env, ctx) {
@@ -55,23 +56,41 @@ async function handlePostRequest(request, env, ctx) {
     const userMsg = msg.Content;
     const fromUserName = msg.FromUserName;
 
+    if (shouldClearHistory(userMsg, env)) {
+      await clearHistoryHybrid(fromUserName, env.AI_CHAT_HISTORY, ctx);
+      reply = env.CLEAR_HISTORY_REPLY || "上下文已清空。";
+      const responseXML = formatXMLReply(msg.FromUserName, msg.ToUserName, reply);
+      return new Response(responseXML, {
+        headers: { "Content-Type": "application/xml" }
+      });
+    }
+
     // 混合读取：内存优先，未命中从 KV 加载
     const conversationHistory = await getHistoryHybrid(fromUserName, env.AI_CHAT_HISTORY);
     const provider = resolveAIProvider(env);
 
+    let timedOut = false;
     try {
-      reply = await withTimeout(
+      const result = await withTimeout(
         chatWithProvider(provider, userMsg, env, conversationHistory),
         getAITimeoutMs(env),
-        getTimeoutReply(env)
+        null
       );
+      if (result === null) {
+        timedOut = true;
+        reply = getTimeoutReply(env);
+      } else {
+        reply = result;
+      }
     } catch (error) {
       console.error("AI Error:", error);
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
     }
 
-    // 混合写入：更新内存缓存，条件写入 KV（不阻塞响应）
-    updateHistoryHybrid(fromUserName, userMsg, reply, env, ctx);
+    // 超时不写历史，避免兜底回复污染上下文
+    if (!timedOut) {
+      updateHistoryHybrid(fromUserName, userMsg, reply, env, ctx);
+    }
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
   }
@@ -265,6 +284,17 @@ function getAITimeoutMs(env) {
 
 function getTimeoutReply(env) {
   return env.AI_TIMEOUT_REPLY || "消息已收到，处理中稍慢，请稍后再试一次。";
+}
+
+function shouldClearHistory(message, env) {
+  const trimmedMessage = (message || "").trim();
+  if (!trimmedMessage) return false;
+  const configuredCommands = (env.CLEAR_HISTORY_COMMANDS || "")
+    .split(",")
+    .map(item => item.trim())
+    .filter(Boolean);
+  const commands = configuredCommands.length > 0 ? configuredCommands : DEFAULT_CLEAR_HISTORY_COMMANDS;
+  return commands.includes(trimmedMessage);
 }
 
 function getBaseSystemPrompt(env, provider) {
