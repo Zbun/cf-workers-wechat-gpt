@@ -4,6 +4,8 @@ const chatCache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10分钟过期
 const MAX_HISTORY_MESSAGES = 4; // 保留最近 4 条消息（2轮对话）
 const KV_WRITE_THRESHOLD = 2; // 历史变化超过 2 条时才写入 KV
+const DEFAULT_AI_TIMEOUT_MS = 4500;
+const DEFAULT_CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 
 export default {
   async fetch(request, env, ctx) {
@@ -51,17 +53,19 @@ async function handlePostRequest(request, env, ctx) {
   if (msg.MsgType === "event" && msg.Event.toLowerCase() === "subscribe") {
     reply = env.WELCOME_MESSAGE || "感谢关注！我是基于 AI 的智能助手，可以回答您的各种问题。";
   } else if (msg.MsgType === "text") {
-    const useOpenAI = env.USE_OPENAI !== "0"; // 默认使用 OpenAI，设为 "0" 时使用 Gemini
     const userMsg = msg.Content;
     const fromUserName = msg.FromUserName;
 
     // 混合读取：内存优先，未命中从 KV 加载
     const conversationHistory = await getHistoryHybrid(fromUserName, env.AI_CHAT_HISTORY);
+    const provider = resolveAIProvider(env);
 
     try {
-      reply = useOpenAI
-        ? await chatWithOpenAI(userMsg, env, conversationHistory)
-        : await chatWithGemini(userMsg, env, conversationHistory);
+      reply = await withTimeout(
+        chatWithProvider(provider, userMsg, env, conversationHistory),
+        getAITimeoutMs(env),
+        getTimeoutReply(env)
+      );
     } catch (error) {
       console.error("AI Error:", error);
       reply = `AI 处理失败: ${error.message || "未知错误"}`;
@@ -242,6 +246,108 @@ function extractContentTag(xml) {
 }
 
 // -------- AI 调用 --------
+
+function resolveAIProvider(env) {
+  const configured = (env.AI_PROVIDER || "").trim().toLowerCase();
+  if (configured) {
+    return configured;
+  }
+  return env.USE_OPENAI === "0" ? "gemini" : "openai";
+}
+
+function getAITimeoutMs(env) {
+  const value = Number.parseInt(env.AI_TIMEOUT_MS || "", 10);
+  if (!Number.isFinite(value) || value < 1000) {
+    return DEFAULT_AI_TIMEOUT_MS;
+  }
+  return Math.min(value, 4900);
+}
+
+function getTimeoutReply(env) {
+  return env.AI_TIMEOUT_REPLY || "消息已收到，处理中稍慢，请稍后再试一次。";
+}
+
+function getOptionalNumber(value) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+async function withTimeout(promise, timeoutMs, fallbackValue) {
+  let timerId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise(resolve => {
+        timerId = setTimeout(() => resolve(fallbackValue), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timerId) {
+      clearTimeout(timerId);
+    }
+  }
+}
+
+async function chatWithProvider(provider, msg, env, history) {
+  if (provider === "workers-ai") {
+    return chatWithCloudflareAI(msg, env, history);
+  }
+  if (provider === "gemini") {
+    return chatWithGemini(msg, env, history);
+  }
+  return chatWithOpenAI(msg, env, history);
+}
+
+async function chatWithCloudflareAI(msg, env, history) {
+  if (!env.AI || typeof env.AI.run !== "function") {
+    throw new Error("Workers AI 未绑定，请在 wrangler.toml 配置 [ai] binding = \"AI\"");
+  }
+
+  const messages = [
+    { role: "system", content: env.OPENAI_SYSTEM_PROMPT || "你是一个有帮助的AI助手" },
+    ...history,
+    { role: "user", content: msg }
+  ];
+
+  const options = {
+    messages,
+    max_tokens: getOptionalNumber(env.CF_AI_MAX_TOKENS),
+    temperature: getOptionalNumber(env.CF_AI_TEMPERATURE)
+  };
+
+  // Workers AI 不接受值为 undefined 的字段
+  Object.keys(options).forEach(key => {
+    if (options[key] === undefined) {
+      delete options[key];
+    }
+  });
+
+  const requestOptions = {};
+  if (env.CF_AI_GATEWAY_ID) {
+    requestOptions.gateway = {
+      id: env.CF_AI_GATEWAY_ID,
+      skipCache: env.CF_AI_GATEWAY_SKIP_CACHE === "1",
+      cacheTtl: getOptionalNumber(env.CF_AI_GATEWAY_CACHE_TTL)
+    };
+    if (requestOptions.gateway.cacheTtl === undefined) {
+      delete requestOptions.gateway.cacheTtl;
+    }
+  }
+
+  try {
+    const result = await env.AI.run(env.CF_AI_MODEL || DEFAULT_CF_MODEL, options, requestOptions);
+    if (typeof result === "string") {
+      return result;
+    }
+    return result?.response || "抱歉，我暂时无法回答你的问题。";
+  } catch (error) {
+    console.error("Workers AI Request Failed:", error);
+    return `Workers AI 错误: ${error.message || "未知错误"}`;
+  }
+}
 
 async function chatWithOpenAI(msg, env, history) {
   const baseUrl = env.OPENAI_BASE_URL || "https://api.openai.com/v1";
