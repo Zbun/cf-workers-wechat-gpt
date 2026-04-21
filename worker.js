@@ -4,7 +4,7 @@ const chatCache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10分钟过期
 const MAX_HISTORY_MESSAGES = 4; // 保留最近 4 条消息（2轮对话）
 const DEFAULT_AI_TIMEOUT_MS = 4500;
-const DEFAULT_CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
+const DEFAULT_CF_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 export default {
   async fetch(request, env, ctx) {
@@ -71,7 +71,7 @@ async function handlePostRequest(request, env, ctx) {
     }
 
     // 混合写入：更新内存缓存，条件写入 KV（不阻塞响应）
-    updateHistoryHybrid(fromUserName, userMsg, reply, env.AI_CHAT_HISTORY, ctx);
+    updateHistoryHybrid(fromUserName, userMsg, reply, env, ctx);
   } else {
     reply = env.UNSUPPORTED_MESSAGE || "目前仅支持文字消息哦！";
   }
@@ -120,7 +120,8 @@ async function getHistoryHybrid(userId, kvNamespace) {
 }
 
 // 混合写入：立即更新内存，条件写入 KV
-function updateHistoryHybrid(userId, userMsg, assistantReply, kvNamespace, ctx) {
+function updateHistoryHybrid(userId, userMsg, assistantReply, env, ctx) {
+  const kvNamespace = env.AI_CHAT_HISTORY;
   const cached = chatCache.get(userId);
   let history = cached ? [...cached.history] : [];
   const kvSnapshot = cached?.kvSnapshot || null;
