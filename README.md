@@ -26,7 +26,7 @@
 | `OPENAI_BASE_URL` | OpenAI 代理地址（如 OpenRouter） | ❌ |
 | `OPENAI_SYSTEM_PROMPT` | OpenAI 系统提示词 | ❌ |
 | `WECHAT_FORMAT_PROMPT` | 公众号输出格式提示词，会追加到系统提示词后 | ❌ |
-| `CF_AI_MODEL` | Workers AI 模型，默认 `@cf/meta/llama-3.1-8b-instruct-fast` | 使用 Workers AI 时 |
+| `CF_AI_MODEL` | Workers AI 模型，默认 `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 使用 Workers AI 时 |
 | `CF_AI_MAX_TOKENS` | Workers AI 最大输出 token 数 | ❌ |
 | `CF_AI_TEMPERATURE` | Workers AI temperature | ❌ |
 | `WELCOME_MESSAGE` | 关注时的欢迎语 | ❌ |
@@ -71,12 +71,13 @@ binding = "AI"
 
 ```env
 AI_PROVIDER=workers-ai
-CF_AI_MODEL=@cf/meta/llama-3.1-8b-instruct-fast
+CF_AI_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast
 AI_TIMEOUT_MS=4500
 ```
 
 说明：
-- `Workers AI` 可能比通过 OpenRouter 再转发更快，因为少了一层外部网关跳转。
+- 默认使用 `llama-3.3-70b-instruct-fp8-fast`，质量优于 8B 模型，响应通常在 5 秒内。
+- 其他模型（如 Qwen、GLM、DeepSeek）推理较慢，容易触发超时兜底，不建议在公众号场景使用。
 - 当前代码会在超时预算内等 AI 返回；超时后直接回复兜底文案，避免公众号请求卡过 5 秒。
 
 如果要限制微信输出不要带 Markdown，可以配置：
