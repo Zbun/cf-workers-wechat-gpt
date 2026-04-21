@@ -1,9 +1,8 @@
-// 混合缓存：key = userId, value = { history, expireAt, kvVersion }
-// kvVersion 记录从 KV 加载时的历史长度，用于决定是否需要写回 KV
+// 混合缓存：key = userId, value = { history, expireAt, kvSnapshot }
+// kvSnapshot 记录上次与 KV 同步的序列化结果，用于判断是否需要写回 KV
 const chatCache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10分钟过期
 const MAX_HISTORY_MESSAGES = 4; // 保留最近 4 条消息（2轮对话）
-const KV_WRITE_THRESHOLD = 2; // 历史变化超过 2 条时才写入 KV
 const DEFAULT_AI_TIMEOUT_MS = 4500;
 const DEFAULT_CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 
@@ -103,11 +102,11 @@ async function getHistoryHybrid(userId, kvNamespace) {
       if (kvData) {
         const history = JSON.parse(kvData);
         if (Array.isArray(history)) {
-          // 加载到内存缓存，记录 KV 版本（当前长度）
+          // 加载到内存缓存，记录当前 KV 快照，避免重复写入相同内容
           chatCache.set(userId, {
             history,
             expireAt: Date.now() + CACHE_TTL,
-            kvVersion: history.length
+            kvSnapshot: kvData
           });
           return history;
         }
@@ -124,7 +123,7 @@ async function getHistoryHybrid(userId, kvNamespace) {
 function updateHistoryHybrid(userId, userMsg, assistantReply, kvNamespace, ctx) {
   const cached = chatCache.get(userId);
   let history = cached ? [...cached.history] : [];
-  const kvVersion = cached?.kvVersion || 0;
+  const kvSnapshot = cached?.kvSnapshot || null;
 
   // 添加新对话
   history.push({ role: "user", content: userMsg });
@@ -139,18 +138,18 @@ function updateHistoryHybrid(userId, userMsg, assistantReply, kvNamespace, ctx) 
   chatCache.set(userId, {
     history,
     expireAt: Date.now() + CACHE_TTL,
-    kvVersion
+    kvSnapshot
   });
 
-  // 条件写入 KV：历史变化超过阈值时才写入
-  const changeCount = history.length - kvVersion;
-  if (kvNamespace && changeCount >= KV_WRITE_THRESHOLD) {
-    const writePromise = kvNamespace.put(userId, JSON.stringify(history))
+  // 只在内容实际变化时写回 KV，避免因为固定长度裁剪导致后续不再落盘
+  const serializedHistory = JSON.stringify(history);
+  if (kvNamespace && serializedHistory !== kvSnapshot) {
+    const writePromise = kvNamespace.put(userId, serializedHistory)
       .then(() => {
-        // 写入成功后更新 kvVersion
+        // 写入成功后更新最新快照
         const current = chatCache.get(userId);
         if (current) {
-          current.kvVersion = history.length;
+          current.kvSnapshot = serializedHistory;
         }
       })
       .catch(err => console.error("KV 写入失败:", err));
