@@ -248,10 +248,10 @@ function extractContentTag(xml) {
 
 function resolveAIProvider(env) {
   const configured = (env.AI_PROVIDER || "").trim().toLowerCase();
-  if (configured) {
+  if (configured === "workers-ai" || configured === "openai") {
     return configured;
   }
-  return env.USE_OPENAI === "0" ? "gemini" : "openai";
+  return "openai";
 }
 
 function getAITimeoutMs(env) {
@@ -264,6 +264,23 @@ function getAITimeoutMs(env) {
 
 function getTimeoutReply(env) {
   return env.AI_TIMEOUT_REPLY || "消息已收到，处理中稍慢，请稍后再试一次。";
+}
+
+function getBaseSystemPrompt(env, provider) {
+  return env.OPENAI_SYSTEM_PROMPT || "你是一个有帮助的AI助手";
+}
+
+function getWechatFormatPrompt(env) {
+  return (env.WECHAT_FORMAT_PROMPT || "").trim();
+}
+
+function buildSystemPrompt(env, provider) {
+  const promptParts = [getBaseSystemPrompt(env, provider)];
+  const wechatFormatPrompt = getWechatFormatPrompt(env);
+  if (wechatFormatPrompt) {
+    promptParts.push(wechatFormatPrompt);
+  }
+  return promptParts.join("\n\n");
 }
 
 function getOptionalNumber(value) {
@@ -294,9 +311,6 @@ async function chatWithProvider(provider, msg, env, history) {
   if (provider === "workers-ai") {
     return chatWithCloudflareAI(msg, env, history);
   }
-  if (provider === "gemini") {
-    return chatWithGemini(msg, env, history);
-  }
   return chatWithOpenAI(msg, env, history);
 }
 
@@ -305,8 +319,9 @@ async function chatWithCloudflareAI(msg, env, history) {
     throw new Error("Workers AI 未绑定，请在 wrangler.toml 配置 [ai] binding = \"AI\"");
   }
 
+  const systemPrompt = buildSystemPrompt(env, "openai");
   const messages = [
-    { role: "system", content: env.OPENAI_SYSTEM_PROMPT || "你是一个有帮助的AI助手" },
+    { role: "system", content: systemPrompt },
     ...history,
     { role: "user", content: msg }
   ];
@@ -324,20 +339,8 @@ async function chatWithCloudflareAI(msg, env, history) {
     }
   });
 
-  const requestOptions = {};
-  if (env.CF_AI_GATEWAY_ID) {
-    requestOptions.gateway = {
-      id: env.CF_AI_GATEWAY_ID,
-      skipCache: env.CF_AI_GATEWAY_SKIP_CACHE === "1",
-      cacheTtl: getOptionalNumber(env.CF_AI_GATEWAY_CACHE_TTL)
-    };
-    if (requestOptions.gateway.cacheTtl === undefined) {
-      delete requestOptions.gateway.cacheTtl;
-    }
-  }
-
   try {
-    const result = await env.AI.run(env.CF_AI_MODEL || DEFAULT_CF_MODEL, options, requestOptions);
+    const result = await env.AI.run(env.CF_AI_MODEL || DEFAULT_CF_MODEL, options);
     if (typeof result === "string") {
       return result;
     }
@@ -352,8 +355,9 @@ async function chatWithOpenAI(msg, env, history) {
   const baseUrl = env.OPENAI_BASE_URL || "https://api.openai.com/v1";
   const url = `${baseUrl}/chat/completions`;
 
+  const systemPrompt = buildSystemPrompt(env, "openai");
   const messages = [
-    { role: "system", content: env.OPENAI_SYSTEM_PROMPT || "你是一个有帮助的AI助手" },
+    { role: "system", content: systemPrompt },
     ...history,
     { role: "user", content: msg }
   ];
@@ -372,39 +376,6 @@ async function chatWithOpenAI(msg, env, history) {
   } catch (error) {
     console.error("OpenAI Request Failed:", error);
     return `OpenAI 错误: ${error.message}`;
-  }
-}
-
-async function chatWithGemini(msg, env, history) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
-
-  const contents = [
-    { role: "user", parts: [{ text: env.GEMINI_SYSTEM_PROMPT || "你是一个有帮助的AI助手" }] }
-  ];
-
-  for (const item of history) {
-    contents.push({
-      role: item.role === "user" ? "user" : "model",
-      parts: [{ text: item.content }]
-    });
-  }
-
-  contents.push({ role: "user", parts: [{ text: msg }] });
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents })
-    });
-
-    const data = await response.json();
-    if (!response.ok) throw new Error(`Gemini Error ${response.status}: ${data.error?.message || "未知错误"}`);
-
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || "抱歉，我暂时无法回答你的问题。";
-  } catch (error) {
-    console.error("Gemini Request Failed:", error);
-    return `Gemini 错误: ${error.message}`;
   }
 }
 
